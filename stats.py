@@ -5,61 +5,92 @@ from PIL import Image, ImageDraw, ImageFont
 from adafruit_ssd1306 import SSD1306_I2C
 import psutil
 import subprocess
+from gpiozero import Button
+import socket  # <--- NEU: Für den Hostnamen
 
 # ==========================================
-# KONFIGURATION: Was soll angezeigt werden?
-# Setze Werte auf True (An) oder False (Aus)
+# KONFIGURATION
 # ==========================================
+# Button Einstellungen
+BUTTON_PIN = 21      # Pin 40 (GND ist Pin 39 daneben)
+TIMEOUT_SEC = 600    # 10 Minuten an bleiben
+
+# Was soll angezeigt werden? 
+# ACHTUNG: Auf 128x32 passen maximal 4 Zeilen gleichzeitig!
+SHOW_HOSTNAME = True # <--- NEU
 SHOW_IP = True
-SHOW_CPU = True      # CPU Last + Temperatur
+SHOW_CPU = True      # CPU Last + Temp + LowVolt Warnung
 SHOW_RAM = True
-SHOW_DISK = True
+SHOW_DISK = False    # Habe ich mal auf False gesetzt, damit Platz für Hostname ist
 
 # Display Einstellungen
 WIDTH = 128
-HEIGHT = 32          # WICHTIG: 32 für dein schmales Display
-I2C_ADDR = 0x3c      # Standard I2C Adresse
+HEIGHT = 32
+I2C_ADDR = 0x3c
 
 # ==========================================
 
-# I2C und Display initialisieren
+# Hardware init
 i2c = busio.I2C(board.SCL, board.SDA)
-# Reset-Pin weggelassen, da du GPIO4 anders nutzt
 disp = SSD1306_I2C(WIDTH, HEIGHT, i2c, addr=I2C_ADDR)
+button = Button(BUTTON_PIN)
 
-# Display leeren
-disp.fill(0)
-disp.show()
-
-# Bildpuffer erstellen
+# Grafik Vorbereitung
 image = Image.new("1", (disp.width, disp.height))
 draw = ImageDraw.Draw(image)
 
-# Schriftart laden
-# Wir versuchen eine hübsche Schriftart, sonst Standard
 try:
-    # Standard bei Raspberry Pi OS Lite
     font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 9)
 except IOError:
     font = ImageFont.load_default()
 
+# Variablen für Timer
+last_press_time = 0
+display_is_active = False
+
+# Init Screen clear
+disp.fill(0)
+disp.show()
+
 while True:
-    # 1. Bild schwarz übermalen (Reset)
+    # Button Logic
+    if button.is_pressed:
+        last_press_time = time.time()
+        display_is_active = True
+    
+    # Timeout Logic
+    if display_is_active and (time.time() - last_press_time > TIMEOUT_SEC):
+        display_is_active = False
+        disp.fill(0)
+        disp.show()
+
+    # Schlafen wenn inaktiv
+    if not display_is_active:
+        time.sleep(0.1)
+        continue
+
+    # ================================================
+    # ZEICHNEN
+    # ================================================
+    
     draw.rectangle((0, 0, disp.width, disp.height), outline=0, fill=0)
 
-    # 2. Position zurücksetzen
     x = 0
-    y = -2    # Kleiner Offset nach oben, damit es auf 32px passt
-    line_height = 8 # Zeilenhöhe für 4 Zeilen auf 32px
+    y = -2
+    line_height = 8
 
-    # ---------------------------------------
-    # DATEN ABFRAGEN UND ZEICHNEN
-    # ---------------------------------------
-    
+    # --- HOSTNAME (NEU) ---
+    if SHOW_HOSTNAME:
+        try:
+            host = socket.gethostname()
+            draw.text((x, y), f"Host: {host}", font=font, fill=255)
+        except:
+            draw.text((x, y), "Host: -", font=font, fill=255)
+        y += line_height
+
     # --- IP ADRESSE ---
     if SHOW_IP:
         try:
-            # Holt die IP (zuverlässiger als Python socket auf dem Pi)
             cmd = "hostname -I | cut -d' ' -f1"
             IP = subprocess.check_output(cmd, shell=True).decode("utf-8").strip()
             draw.text((x, y), f"IP: {IP}", font=font, fill=255)
@@ -67,23 +98,32 @@ while True:
             draw.text((x, y), "IP: -", font=font, fill=255)
         y += line_height
 
-    # --- CPU LAST & TEMP ---
+    # --- CPU LAST & TEMP & POWER CHECK ---
     if SHOW_CPU:
         cpu_load = psutil.cpu_percent()
-        # Temperatur auslesen
+        # Temp lesen
         try:
             with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
                 temp = round(int(f.read()) / 1000, 1)
         except:
             temp = "0"
+
+        # Undervoltage Check
+        try:
+            cmd = "vcgencmd get_throttled | cut -d'=' -f2"
+            throttled_hex = subprocess.check_output(cmd, shell=True).decode("utf-8").strip()
+            if int(throttled_hex, 16) != 0:
+                draw.text((x, y), "WARN: LOW VOLT!", font=font, fill=255)
+            else:
+                draw.text((x, y), f"CPU: {cpu_load}%  {temp}°C", font=font, fill=255)
+        except:
+            draw.text((x, y), f"CPU: {cpu_load}%  {temp}°C", font=font, fill=255)
             
-        draw.text((x, y), f"CPU: {cpu_load}%  {temp}°C", font=font, fill=255)
         y += line_height
 
     # --- RAM ---
     if SHOW_RAM:
         mem = psutil.virtual_memory()
-        # Umrechnung in MB
         used_mb = int(mem.used / 1024 / 1024)
         total_mb = int(mem.total / 1024 / 1024)
         draw.text((x, y), f"RAM: {used_mb}/{total_mb}MB", font=font, fill=255)
@@ -92,15 +132,11 @@ while True:
     # --- DISK USAGE ---
     if SHOW_DISK:
         disk = psutil.disk_usage('/')
-        # Umrechnung in GB
         used_gb = round(disk.used / 1024 / 1024 / 1024, 1)
         total_gb = round(disk.total / 1024 / 1024 / 1024, 1)
-        draw.text((x, y), f"SD:  {used_gb}/{total_gb}GB ({disk.percent}%)", font=font, fill=255)
+        draw.text((x, y), f"SD:  {used_gb}/{total_gb}GB", font=font, fill=255)
         y += line_height
 
-    # 3. Bild anzeigen
     disp.image(image)
     disp.show()
-    
-    # 4. Kurz warten (Update Intervall)
     time.sleep(2)
