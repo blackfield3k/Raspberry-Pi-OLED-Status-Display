@@ -6,23 +6,19 @@ from adafruit_ssd1306 import SSD1306_I2C
 import psutil
 import subprocess
 import socket
-# Wir importieren Button, nutzen ihn aber nur, wenn konfiguriert
 from gpiozero import Button
 
 # ==========================================
 # KONFIGURATION
 # ==========================================
 
-# --- Modus wählen ---
-USE_BUTTON = True    # True = Display geht nur auf Knopfdruck an
-                     # False = Display ist IMMER an (Dauerbetrieb)
+# --- Modus ---
+USE_BUTTON = True    # True = An auf Knopfdruck | False = Immer an
+BUTTON_PIN = 21      # Pin 40
+TIMEOUT_SEC = 600    # 10 Minuten
 
-# Button Einstellungen (nur relevant, wenn USE_BUTTON = True)
-BUTTON_PIN = 21      # Pin 40 (GND ist Pin 39)
-TIMEOUT_SEC = 600    # Wie lange bleibt es an? (Sekunden)
-
-# Was soll angezeigt werden?
-# (Achte darauf, maximal 4 Zeilen auf True zu setzen bei 128x32)
+# --- Was soll angezeigt werden? ---
+# Das Skript passt die Schriftgröße automatisch an die Anzahl an!
 SHOW_HOSTNAME = True
 SHOW_IP = True
 SHOW_CPU = True
@@ -36,93 +32,113 @@ I2C_ADDR = 0x3c
 
 # ==========================================
 
-# I2C und Display initialisieren
+# 1. Hardware Init
 i2c = busio.I2C(board.SCL, board.SDA)
 disp = SSD1306_I2C(WIDTH, HEIGHT, i2c, addr=I2C_ADDR)
 
-# Button nur initialisieren, wenn wir ihn brauchen
 if USE_BUTTON:
     button = Button(BUTTON_PIN)
 else:
     button = None
 
-# Grafik Vorbereitung
+# 2. Automatische Schriftgrößen-Berechnung
+# Wir zählen, wie viele Zeilen auf True stehen
+active_items = [SHOW_HOSTNAME, SHOW_IP, SHOW_CPU, SHOW_RAM, SHOW_DISK]
+line_count = sum(active_items) # Zählt alle 'True' zusammen
+
+# Schriftgröße und Zeilenhöhe basierend auf Anzahl wählen
+if line_count == 1:
+    FONT_SIZE = 22
+    LINE_HEIGHT = 32
+    Y_OFFSET = 2  # Etwas korrektur für vertikale Zentrierung
+elif line_count == 2:
+    FONT_SIZE = 14
+    LINE_HEIGHT = 16
+    Y_OFFSET = -1
+elif line_count == 3:
+    FONT_SIZE = 10
+    LINE_HEIGHT = 11
+    Y_OFFSET = -1
+else:
+    # 4 oder mehr Zeilen (Fallback)
+    FONT_SIZE = 8
+    LINE_HEIGHT = 8
+    Y_OFFSET = -2
+
+# Schriftart laden mit berechneter Größe
+try:
+    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", FONT_SIZE)
+except IOError:
+    # Fallback, falls Schriftart fehlt (sieht dann aber fix aus)
+    font = ImageFont.load_default()
+
+# Grafik Puffer
 image = Image.new("1", (disp.width, disp.height))
 draw = ImageDraw.Draw(image)
 
-try:
-    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 9)
-except IOError:
-    font = ImageFont.load_default()
-
 # Variablen
 last_press_time = time.time()
-display_is_active = True # Standardwert beim Start
+display_is_active = True 
 
-# Init Screen clear
+# Start clean
 disp.fill(0)
 disp.show()
 
 while True:
     
-    # ------------------------------------------------
-    # LOGIK: AN ODER AUS?
-    # ------------------------------------------------
-    
+    # --- Button / Timeout Logik ---
     if USE_BUTTON:
-        # Modus: Nur auf Knopfdruck
-        
-        # Wurde gedrückt?
         if button.is_pressed:
             last_press_time = time.time()
             display_is_active = True
         
-        # Ist Zeit abgelaufen?
         if display_is_active and (time.time() - last_press_time > TIMEOUT_SEC):
             display_is_active = False
             disp.fill(0)
             disp.show()
             
-        # Wenn inaktiv -> Schlafen legen und Loop neu starten
         if not display_is_active:
             time.sleep(0.1)
             continue
-            
     else:
-        # Modus: Immer an
         display_is_active = True
 
     # ================================================
-    # ZEICHNEN (Nur wenn aktiv)
+    # ZEICHNEN
     # ================================================
     
     # Schwarz füllen
     draw.rectangle((0, 0, disp.width, disp.height), outline=0, fill=0)
 
+    # Startposition setzen (Dynamisch berechnet)
     x = 0
-    y = -2
-    line_height = 8
+    y = Y_OFFSET 
 
     # --- HOSTNAME ---
     if SHOW_HOSTNAME:
         try:
             host = socket.gethostname()
-            draw.text((x, y), f"Host: {host}", font=font, fill=255)
+            # Falls Hostname zu lang für große Schrift, abschneiden
+            if line_count <= 2 and len(host) > 10: 
+                host = host[:9] + ".."
+            draw.text((x, y), f"{host}", font=font, fill=255)
         except:
             draw.text((x, y), "Host: -", font=font, fill=255)
-        y += line_height
+        y += LINE_HEIGHT
 
     # --- IP ADRESSE ---
     if SHOW_IP:
         try:
             cmd = "hostname -I | cut -d' ' -f1"
             IP = subprocess.check_output(cmd, shell=True).decode("utf-8").strip()
-            draw.text((x, y), f"IP: {IP}", font=font, fill=255)
+            # Bei großer Schrift das "IP:" weglassen, Platz sparen
+            prefix = "IP: " if line_count > 2 else ""
+            draw.text((x, y), f"{prefix}{IP}", font=font, fill=255)
         except:
-            draw.text((x, y), "IP: -", font=font, fill=255)
-        y += line_height
+            draw.text((x, y), "-", font=font, fill=255)
+        y += LINE_HEIGHT
 
-    # --- CPU & POWER ---
+    # --- CPU ---
     if SHOW_CPU:
         cpu_load = psutil.cpu_percent()
         try:
@@ -136,28 +152,36 @@ while True:
             cmd = "vcgencmd get_throttled | cut -d'=' -f2"
             throttled_hex = subprocess.check_output(cmd, shell=True).decode("utf-8").strip()
             if int(throttled_hex, 16) != 0:
-                draw.text((x, y), "WARN: LOW VOLT!", font=font, fill=255)
+                draw.text((x, y), "LOW VOLT!", font=font, fill=255)
             else:
-                draw.text((x, y), f"CPU: {cpu_load}%  {temp}°C", font=font, fill=255)
+                # Formatierung je nach Platz
+                if line_count <= 2:
+                    draw.text((x, y), f"CPU:{cpu_load}% {temp}C", font=font, fill=255)
+                else:
+                    draw.text((x, y), f"CPU: {cpu_load}%  {temp}°C", font=font, fill=255)
         except:
-            draw.text((x, y), f"CPU: {cpu_load}%  {temp}°C", font=font, fill=255)
-        y += line_height
+            draw.text((x, y), f"CPU: {cpu_load}%", font=font, fill=255)
+        y += LINE_HEIGHT
 
     # --- RAM ---
     if SHOW_RAM:
         mem = psutil.virtual_memory()
         used_mb = int(mem.used / 1024 / 1024)
         total_mb = int(mem.total / 1024 / 1024)
-        draw.text((x, y), f"RAM: {used_mb}/{total_mb}MB", font=font, fill=255)
-        y += line_height
+        
+        prefix = "RAM: " if line_count > 2 else "M: "
+        draw.text((x, y), f"{prefix}{used_mb}/{total_mb}MB", font=font, fill=255)
+        y += LINE_HEIGHT
 
     # --- DISK ---
     if SHOW_DISK:
         disk = psutil.disk_usage('/')
         used_gb = round(disk.used / 1024 / 1024 / 1024, 1)
         total_gb = round(disk.total / 1024 / 1024 / 1024, 1)
-        draw.text((x, y), f"SD:  {used_gb}/{total_gb}GB", font=font, fill=255)
-        y += line_height
+        
+        prefix = "SD: " if line_count > 2 else "D: "
+        draw.text((x, y), f"{prefix}{used_gb}/{total_gb}GB", font=font, fill=255)
+        y += LINE_HEIGHT
 
     disp.image(image)
     disp.show()
