@@ -8,6 +8,15 @@ import subprocess
 import socket
 from gpiozero import Button
 
+
+# Konfiguration importieren
+try:
+    from config import *
+except ImportError:
+    print("Fehler: config.py nicht gefunden!")
+    raise
+
+    
 # ==========================================
 # KONFIGURATION
 # ==========================================
@@ -119,8 +128,8 @@ while True:
         try:
             host = socket.gethostname()
             # Falls Hostname zu lang für große Schrift, abschneiden
-            if line_count <= 2 and len(host) > 10: 
-                host = host[:9] + ".."
+            if line_count <= 2 and len(host) > 12: 
+                host = host[:11] + ".."
             draw.text((x, y), f"{host}", font=font, fill=255)
         except:
             draw.text((x, y), "Host: -", font=font, fill=255)
