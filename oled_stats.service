@@ -1,0 +1,14 @@
+[Unit]
+Description=OLED Info Display Service
+After=network.target
+
+[Service]
+Type=simple
+User=%USER%
+WorkingDirectory=%WORKDIR%
+ExecStart=%WORKDIR%/venv/bin/python3 %WORKDIR%/stats.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
