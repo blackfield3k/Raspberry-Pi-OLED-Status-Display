@@ -16,28 +16,8 @@ except ImportError:
     print("Fehler: config.py nicht gefunden!")
     raise
 
-    
-# ==========================================
-# KONFIGURATION
-# ==========================================
 
-# --- Modus ---
-USE_BUTTON = True    # True = An auf Knopfdruck | False = Immer an
-BUTTON_PIN = 21      # Pin 40
-TIMEOUT_SEC = 600    # 10 Minuten
 
-# --- Was soll angezeigt werden? ---
-# Das Skript passt die Schriftgröße automatisch an die Anzahl an!
-SHOW_HOSTNAME = True
-SHOW_IP = True
-SHOW_CPU = True
-SHOW_RAM = True
-SHOW_DISK = False
-
-# Display Einstellungen
-WIDTH = 128
-HEIGHT = 32
-I2C_ADDR = 0x3c
 
 # ==========================================
 
